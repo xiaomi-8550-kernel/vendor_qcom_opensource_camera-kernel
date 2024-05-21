@@ -26,6 +26,8 @@
 #include "cam_cdm_util.h"
 #include "cam_common_util.h"
 #include "cam_subdev.h"
+#include "cam_csiphy_core.h"
+#include "cam_context.h"
 
 /* CSIPHY TPG VC/DT values */
 #define CAM_IFE_CPHY_TPG_VC_VAL                         0x0
@@ -56,6 +58,24 @@
 #define CAM_IFE_CSID_MAX_OUT_OF_SYNC_ERR_COUNT         3
 
 #define CAM_CSID_IRQ_CTRL_NAME_LEN                     10
+
+static int ife_mqs_node1_cnt  = 20;
+static long ife_mqs_node1[20] = {0};
+module_param_array(ife_mqs_node1, long, &ife_mqs_node1_cnt, 0644);
+
+static void count_ife_error(uint32_t index)
+{
+	struct timespec64   timestamp;
+	uint32_t            phy_id = 0;
+	if (index < ife_mqs_node1_cnt && index >= 0)
+	{
+		phy_id = index;
+		CAM_GET_TIMESTAMP(timestamp);
+		ife_mqs_node1[phy_id] = timestamp.tv_sec;
+		CAM_ERR(CAM_ISP, "set ife error node1: phy_id: %d, timestamp: sec: %ld, nsec: %ld",
+				phy_id, timestamp.tv_sec, timestamp.tv_nsec);
+	}
+}
 
 static void cam_ife_csid_ver2_print_debug_reg_status(
 	struct cam_ife_csid_ver2_hw *csid_hw,
@@ -1250,6 +1270,9 @@ static int cam_ife_csid_ver2_rx_err_bottom_half(
 	uint32_t                                    long_pkt_ftr_val;
 	uint32_t                                    total_crc;
 	int                                         data_idx = 0;
+	const char                                 *p = NULL;
+	u8                                          phy_index = 0;
+	int                                         ret = 0;
 
 	if (!handler_priv || !evt_payload_priv) {
 		CAM_ERR(CAM_ISP, "Invalid params");
@@ -1303,6 +1326,9 @@ static int cam_ife_csid_ver2_rx_err_bottom_half(
 
 		if (irq_status & IFE_CSID_VER2_RX_ERROR_CPHY_PH_CRC) {
 			event_type |= CAM_ISP_HW_ERROR_CSID_PKT_HDR_CORRUPTED;
+
+			count_ife_error(data_idx);
+
 			CAM_ERR_BUF(CAM_ISP, log_buf, CAM_IFE_CSID_LOG_BUF_LEN, &len,
 				"CPHY_PH_CRC: Pkt Hdr CRC mismatch");
 		}
@@ -1312,6 +1338,8 @@ static int cam_ife_csid_ver2_rx_err_bottom_half(
 			val = cam_io_r_mb(soc_info->reg_map[0].mem_base +
 				csi2_reg->captured_long_pkt_0_addr);
 
+			count_ife_error(data_idx);
+
 			CAM_ERR_BUF(CAM_ISP, log_buf, CAM_IFE_CSID_LOG_BUF_LEN, &len,
 				"STREAM_UNDERFLOW: Fewer bytes rcvd than WC:%d in pkt hdr",
 				val & 0xFFFF);
@@ -1319,6 +1347,9 @@ static int cam_ife_csid_ver2_rx_err_bottom_half(
 
 		if (irq_status & IFE_CSID_VER2_RX_ERROR_ECC) {
 			event_type |= CAM_ISP_HW_ERROR_CSID_PKT_HDR_CORRUPTED;
+
+			count_ife_error(data_idx);
+
 			CAM_ERR_BUF(CAM_ISP, log_buf,
 				CAM_IFE_CSID_LOG_BUF_LEN, &len,
 				"DPHY_ERROR_ECC: Pkt hdr errors unrecoverable. ECC: 0x%x",
@@ -1348,6 +1379,8 @@ static int cam_ife_csid_ver2_rx_err_bottom_half(
 			total_crc = cam_io_r_mb(soc_info->reg_map[0].mem_base +
 				csi2_reg->total_crc_err_addr);
 
+			count_ife_error(data_idx);
+
 			if (csid_hw->rx_cfg.lane_type == CAM_ISP_LANE_TYPE_CPHY) {
 				val = cam_io_r_mb(soc_info->reg_map[0].mem_base +
 					csi2_reg->captured_cphy_pkt_hdr_addr);
@@ -1363,6 +1396,18 @@ static int cam_ife_csid_ver2_rx_err_bottom_half(
 					"PHY_CRC_ERROR: Long pkt payload CRC mismatch. Totl CRC Errs: %u, Rcvd CRC: 0x%x Caltd CRC: 0x%x",
 					total_crc, long_pkt_ftr_val & 0xffff,
 					long_pkt_ftr_val >> 16);
+			}
+
+			p = soc_info->dev->of_node->name;
+			p += strlen(soc_info->dev->of_node->name) - 1;
+			if (p) {
+				ret = kstrtou8(p, 0, &phy_index);
+				CAM_INFO(CAM_ISP, "PHY_CRC_ERROR phy_index[%d], ret %d", phy_index, ret);
+				soc_info->phy_cfg_current_index[phy_index]++;
+				if (soc_info->phy_cfg_current_index[phy_index] >= 0xF) {
+					soc_info->phy_cfg_current_index[phy_index] = 0xF;
+				}
+				XM_MIPI_KMD_SET_CTRL_FLAG_VAL(phy_index, soc_info->phy_cfg_current_index[phy_index]);
 			}
 		}
 
@@ -4506,7 +4551,7 @@ static int cam_ife_csid_ver2_enable_hw(
 	void __iomem *mem_base;
 	const struct cam_ife_csid_ver2_path_reg_info *path_reg = NULL;
 	uint32_t top_err_irq_mask = 0;
-	uint32_t buf_done_irq_mask[CAM_IFE_CSID_IRQ_REGISTERS_MAX] = {0};
+	uint32_t buf_done_irq_mask = 0;
 	uint32_t top_info_irq_mask = 0;
 
 	if (csid_hw->flags.device_enabled) {
@@ -4546,12 +4591,11 @@ static int cam_ife_csid_ver2_enable_hw(
 	/* Read hw version */
 	val = cam_io_r_mb(mem_base + csid_reg->cmn_reg->hw_version_addr);
 
-	buf_done_irq_mask[CAM_IFE_CSID_IRQ_TOP_REG_STATUS0] =
-		csid_reg->cmn_reg->top_buf_done_irq_mask;
+	buf_done_irq_mask = csid_reg->cmn_reg->top_buf_done_irq_mask;
 	csid_hw->buf_done_irq_handle = cam_irq_controller_subscribe_irq(
 		csid_hw->top_irq_controller,
 		CAM_IRQ_PRIORITY_4,
-		buf_done_irq_mask,
+		&buf_done_irq_mask,
 		csid_hw,
 		cam_ife_csid_ver2_handle_buf_done_irq,
 		NULL,
@@ -4586,7 +4630,7 @@ static int cam_ife_csid_ver2_enable_hw(
 	}
 
 	rc = cam_irq_controller_register_dependent(csid_hw->top_irq_controller,
-		csid_hw->buf_done_irq_controller, buf_done_irq_mask);
+		csid_hw->buf_done_irq_controller, &buf_done_irq_mask);
 
 	if (rc) {
 		cam_irq_controller_unsubscribe_irq(csid_hw->top_irq_controller,

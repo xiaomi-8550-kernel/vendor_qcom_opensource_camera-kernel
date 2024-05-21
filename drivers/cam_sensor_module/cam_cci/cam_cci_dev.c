@@ -299,6 +299,7 @@ irqreturn_t cam_cci_irq(int irq_num, void *data)
 				CAM_ERR(CAM_CCI,
 					"Base:%pK,cci: %d, M0_Q0 NACK ERROR: 0x%x",
 					base, cci_dev->soc_info.index, irq_status0);
+			cam_cci_cmds_dump(cci_dev, MASTER_0, QUEUE_0);
 			cam_cci_dump_registers(cci_dev, MASTER_0,
 					QUEUE_0);
 			complete_all(&cci_dev->cci_master_info[MASTER_0]
@@ -313,6 +314,7 @@ irqreturn_t cam_cci_irq(int irq_num, void *data)
 				CAM_ERR(CAM_CCI,
 					"Base:%pK,cci: %d, M0_Q1 NACK ERROR: 0x%x",
 					base, cci_dev->soc_info.index, irq_status0);
+			cam_cci_cmds_dump(cci_dev, MASTER_0, QUEUE_1);
 			cam_cci_dump_registers(cci_dev, MASTER_0,
 					QUEUE_1);
 			complete_all(&cci_dev->cci_master_info[MASTER_0]
@@ -341,6 +343,7 @@ irqreturn_t cam_cci_irq(int irq_num, void *data)
 				CAM_ERR(CAM_CCI,
 					"Base:%pK, cci: %d, M1_Q0 NACK ERROR: 0x%x",
 					base, cci_dev->soc_info.index, irq_status0);
+			cam_cci_cmds_dump(cci_dev, MASTER_1, QUEUE_0);
 			cam_cci_dump_registers(cci_dev, MASTER_1,
 					QUEUE_0);
 			complete_all(&cci_dev->cci_master_info[MASTER_1]
@@ -355,6 +358,7 @@ irqreturn_t cam_cci_irq(int irq_num, void *data)
 				CAM_ERR(CAM_CCI,
 					"Base:%pK, cci: %d, M1_Q1 NACK ERROR: 0x%x",
 					base, cci_dev->soc_info.index, irq_status0);
+			cam_cci_cmds_dump(cci_dev, MASTER_1, QUEUE_1);
 			cam_cci_dump_registers(cci_dev, MASTER_1,
 				QUEUE_1);
 			complete_all(&cci_dev->cci_master_info[MASTER_1]
@@ -472,6 +476,7 @@ static int cam_cci_component_bind(struct device *dev,
 	struct cam_hw_soc_info *soc_info = NULL;
 	int rc = 0;
 	struct platform_device *pdev = to_platform_device(dev);
+	uint32_t *cci_write_cmds0, *cci_write_cmds1;
 
 	new_cci_dev = devm_kzalloc(&pdev->dev, sizeof(struct cci_device),
 		GFP_KERNEL);
@@ -545,6 +550,25 @@ static int cam_cci_component_bind(struct device *dev,
 		CAM_WARN(CAM_CCI, "debugfs creation failed");
 		rc = 0;
 	}
+
+	cci_write_cmds0 = kvcalloc(CCI_I2C_CMDS_SNAPSHOT_MAX_COUNT,
+		sizeof(uint32_t), GFP_KERNEL);
+	if (!cci_write_cmds0) {
+		CAM_ERR(CAM_CCI, "Memory allocation failed for master0 cmds");
+		return -ENOMEM;
+	}
+	new_cci_dev->cci_master_info[CCI_MASTER_0].cci_write_cmds =
+		cci_write_cmds0;
+
+	cci_write_cmds1 = kvcalloc(CCI_I2C_CMDS_SNAPSHOT_MAX_COUNT,
+		sizeof(uint32_t), GFP_KERNEL);
+	if (!cci_write_cmds1) {
+		CAM_ERR(CAM_CCI, "Memory allocation failed for master1 cmds");
+		return -ENOMEM;
+	}
+	new_cci_dev->cci_master_info[CCI_MASTER_1].cci_write_cmds =
+		cci_write_cmds1;
+
 	CAM_DBG(CAM_CCI, "Component bound successfully");
 	return rc;
 

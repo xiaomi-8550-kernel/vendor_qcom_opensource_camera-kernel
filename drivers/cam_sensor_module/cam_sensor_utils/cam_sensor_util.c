@@ -16,6 +16,7 @@
 
 #define CAM_SENSOR_VERSION_PINCTRL_STATE_SLEEP "cam_version_suspend"
 #define CAM_SENSOR_VERSION_PINCTRL_STATE_DEFAULT "cam_version_default"
+static struct mutex     cam_power_up_sync_mutex[MAX_CCI_DEV][MAX_MASTER_DEV];
 
 #define VALIDATE_VOLTAGE(min, max, config_val) ((config_val) && \
 	(config_val >= min) && (config_val <= max))
@@ -1067,6 +1068,106 @@ int32_t cam_sensor_i2c_read_data(
 	return rc;
 }
 
+int32_t cam_sensor_i2c_read_write_ois_data(
+	struct i2c_settings_array *i2c_settings,
+	struct camera_io_master *io_master_info)
+{
+	int32_t                   rc = 0;
+	struct i2c_settings_list  *i2c_list;
+	uint32_t                  cnt = 0;
+	uint8_t                   *read_buff = NULL;
+	uint32_t                  buff_length = 0;
+	uint32_t                  read_length = 0;
+	uint32_t                  last_read_buff_size = 0;
+
+	list_for_each_entry(i2c_list,
+		&(i2c_settings->list_head), list) {
+
+		if (i2c_list->op_code != CAM_SENSOR_I2C_WRITE_RANDOM) {
+			read_buff = i2c_list->i2c_settings.read_buff;
+			buff_length = i2c_list->i2c_settings.read_buff_len;
+			if ((read_buff == NULL) || (buff_length == 0)) {
+				CAM_ERR(CAM_SENSOR,
+					"Invalid input buffer, buffer: %pK, length: %d",
+					read_buff, buff_length);
+				return -EINVAL;
+			}
+			read_buff += last_read_buff_size;
+		}
+
+		if (i2c_list->op_code == CAM_SENSOR_I2C_READ_RANDOM) {
+			read_length = i2c_list->i2c_settings.data_type *
+				i2c_list->i2c_settings.size;
+			if ((read_length > buff_length) ||
+				(read_length < i2c_list->i2c_settings.size)) {
+				CAM_ERR(CAM_SENSOR,
+				"Invalid size, readLen:%d, bufLen:%d, size: %d",
+				read_length, buff_length,
+				i2c_list->i2c_settings.size);
+				return -EINVAL;
+			}
+			for (cnt = 0; cnt < (i2c_list->i2c_settings.size);
+				cnt++) {
+				struct cam_sensor_i2c_reg_array *reg_setting =
+				&(i2c_list->i2c_settings.reg_setting[cnt]);
+				rc = camera_io_dev_read(io_master_info,
+					reg_setting->reg_addr,
+					&reg_setting->reg_data,
+					i2c_list->i2c_settings.addr_type,
+					i2c_list->i2c_settings.data_type,
+					false);
+				if (rc < 0) {
+					CAM_ERR(CAM_SENSOR,
+					"Failed: random read I2C settings: %d",
+					rc);
+					return rc;
+				}
+				if (i2c_list->i2c_settings.data_type <
+					CAMERA_SENSOR_I2C_TYPE_MAX) {
+					memcpy(read_buff,
+					&reg_setting->reg_data,
+					i2c_list->i2c_settings.data_type);
+					read_buff +=
+					i2c_list->i2c_settings.data_type;
+				}
+			}
+		} else if (i2c_list->op_code == CAM_SENSOR_I2C_READ_SEQ) {
+			read_length = i2c_list->i2c_settings.size;
+			if (read_length > buff_length) {
+				CAM_ERR(CAM_SENSOR,
+				"Invalid buffer size, readLen: %d, bufLen: %d",
+				read_length, buff_length);
+				return -EINVAL;
+			}
+			rc = camera_io_dev_read_seq(
+				io_master_info,
+				i2c_list->i2c_settings.reg_setting[0].reg_addr,
+				read_buff,
+				i2c_list->i2c_settings.addr_type,
+				i2c_list->i2c_settings.data_type,
+				i2c_list->i2c_settings.size);
+			if (rc < 0) {
+				CAM_ERR(CAM_SENSOR,
+					"failed: seq read I2C settings: %d",
+					rc);
+				return rc;
+			}
+		} else if (i2c_list->op_code == CAM_SENSOR_I2C_WRITE_RANDOM) {
+			rc = camera_io_dev_write(io_master_info,
+				&(i2c_list->i2c_settings));
+			if (rc < 0) {
+				CAM_ERR(CAM_SENSOR,
+					"Failed to random write I2C settings: %d",
+					rc);
+				return rc;
+			}
+		}
+		last_read_buff_size = read_length;
+	}
+
+	return rc;
+}
+
 int32_t msm_camera_fill_vreg_params(
 	struct cam_hw_soc_info *soc_info,
 	struct cam_sensor_power_setting *power_setting,
@@ -1291,11 +1392,9 @@ int32_t msm_camera_fill_vreg_params(
 					if (VALIDATE_VOLTAGE(
 						soc_info->rgltr_min_volt[j],
 						soc_info->rgltr_max_volt[j],
-						power_setting[i].config_val)) {
-						soc_info->rgltr_min_volt[j] =
-						soc_info->rgltr_max_volt[j] =
-						power_setting[i].config_val;
-					}
+						power_setting[i].config_val))
+						power_setting[i].valid_config = true;
+
 					break;
 				}
 			}
@@ -1456,6 +1555,7 @@ int32_t cam_sensor_update_power_settings(void *cmd_buf,
 		kzalloc(sizeof(struct cam_sensor_power_setting) *
 			MAX_POWER_CONFIG, GFP_KERNEL);
 	if (!power_info->power_setting) {
+		CAM_ERR(CAM_SENSOR, "power_setting alloc failed!");
 		rc = -ENOMEM;
 		goto free_power_command;
 	}
@@ -1468,6 +1568,7 @@ int32_t cam_sensor_update_power_settings(void *cmd_buf,
 		kfree(power_info->power_setting);
 		power_info->power_setting = NULL;
 		power_info->power_setting_size = 0;
+		CAM_ERR(CAM_SENSOR, "power_down_setting alloc failed!");
 		rc = -ENOMEM;
 		goto free_power_command;
 	}
@@ -1475,6 +1576,7 @@ int32_t cam_sensor_update_power_settings(void *cmd_buf,
 	while (tot_size < cmd_length) {
 		if (cam_sensor_validate(ptr, (cmd_length - tot_size))) {
 			rc = -EINVAL;
+			CAM_ERR(CAM_SENSOR, "cam_sensor_validate failed!");
 			goto free_power_settings;
 		}
 		if (cmm_hdr->cmd_type ==
@@ -1661,9 +1763,11 @@ free_power_settings:
 	power_info->power_setting = NULL;
 	power_info->power_down_setting_size = 0;
 	power_info->power_setting_size = 0;
+	CAM_ERR(CAM_SENSOR, "free_power_settings!");
 free_power_command:
 	kfree(pwr_cmd);
 	pwr_cmd = NULL;
+	CAM_ERR(CAM_SENSOR, "free_power_command!");
 	return rc;
 }
 
@@ -2688,4 +2792,43 @@ int get_camera_pinctrl_state(struct msm_pinctrl_info *sensor_pctrl)
 		return -EINVAL;
 	}
 	return 0;
+}
+
+void init_power_sync_mutex(int cci, int master)
+{
+	if (cci < MAX_CCI_DEV && master < MAX_MASTER_DEV)
+	{
+		CAM_INFO(CAM_SENSOR, "init cam_power_up_sync_mutex cci[%d],master[%d]", cci, master);
+		mutex_init(&cam_power_up_sync_mutex[cci][master]);
+	}
+	else
+	{
+		CAM_ERR(CAM_SENSOR, "cci[%d]！ MAX:%d, master[%d] MAX", cci, MAX_CCI_DEV, master, MAX_MASTER_DEV);
+	}
+}
+
+void lock_power_sync_mutex(int cci, int master)
+{
+	if (cci < MAX_CCI_DEV && master < MAX_MASTER_DEV)
+	{
+		mutex_lock(&cam_power_up_sync_mutex[cci][master]);
+		CAM_DBG(CAM_SENSOR, "mutex_lock cci[%d],master[%d]", cci, master);
+	}
+	else
+	{
+		CAM_ERR(CAM_SENSOR, "cci[%d]！ MAX:%d, master[%d] MAX", cci, MAX_CCI_DEV, master, MAX_MASTER_DEV);
+	}
+}
+
+void unlock_power_sync_mutex(int cci, int master)
+{
+	if (cci < MAX_CCI_DEV && master < MAX_MASTER_DEV)
+	{
+		mutex_unlock(&cam_power_up_sync_mutex[cci][master]);
+		CAM_DBG(CAM_SENSOR, "mutex_unlock cci[%d],master[%d]", cci, master);
+	}
+	else
+	{
+		CAM_ERR(CAM_SENSOR, "cci[%d]！ MAX:%d, master[%d] MAX", cci, MAX_CCI_DEV, master, MAX_MASTER_DEV);
+	}
 }

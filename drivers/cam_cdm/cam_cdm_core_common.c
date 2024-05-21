@@ -399,7 +399,7 @@ int cam_cdm_stream_ops_internal(void *hw_priv,
 		goto end;
 	}
 	if (operation == true) {
-		if (true == client->stream_on) {
+		if (client->stream_on) {
 			CAM_ERR(CAM_CDM,
 				"Invalid CDM client is already streamed ON");
 			goto end;

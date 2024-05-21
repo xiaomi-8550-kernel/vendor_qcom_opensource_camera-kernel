@@ -110,7 +110,7 @@ int cam_common_read_poll_timeout(
 
 	wait_time_us = timeout * timeout_multiplier;
 
-	if (false == cam_presil_mode_enabled()) {
+	if (!cam_presil_mode_enabled()) {
 		rc = readl_poll_timeout(addr, *status, (*status & mask) == check_val, delay,
 			wait_time_us);
 	} else {
@@ -536,28 +536,6 @@ static int cam_err_inject_get(char *buffer,
 	}
 
 	return scnprintf(buffer, buff_max_size, "uninitialised");
-}
-
-void *cam_retry_kzalloc(
-	const char *func,
-	int line,
-	size_t s,
-	gfp_t gfp)
-{
-	void *p = NULL;
-	int   i;
-
-	for (i = 0; i < 3; ++i) {
-		p = kzalloc(s, gfp);
-		if (NULL != p) {
-			break;
-		} else {
-			CAM_ERR(CAM_UTIL, "Failed to kzalloc size:%lu function:%s line:%d at times %d",
-				s, func, line, i);
-		}
-		msleep(1000);
-	}
-	return p;
 }
 
 static const struct kernel_param_ops cam_error_inject_ops = {

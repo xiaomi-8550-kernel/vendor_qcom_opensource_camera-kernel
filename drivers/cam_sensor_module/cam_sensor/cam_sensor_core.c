@@ -438,6 +438,40 @@ static int32_t cam_sensor_pkt_parse(struct cam_sensor_ctrl_t *s_ctrl,
 			csl_packet->header.request_id);
 		break;
 	}
+	case CAM_SENSOR_PACKET_OPCODE_SENSOR_WRITE: {
+		if ((s_ctrl->sensor_state == CAM_SENSOR_INIT) ||
+			(s_ctrl->sensor_state == CAM_SENSOR_ACQUIRE)) {
+			rc = -EINVAL;
+			CAM_WARN(CAM_SENSOR,
+				"Not in right state to write sensor: %d",
+				s_ctrl->sensor_state);
+			goto end;
+		}
+		CAM_DBG(CAM_SENSOR, "Received write buffer");
+
+		i2c_reg_settings = &i2c_data->write_settings;
+		i2c_reg_settings->request_id = 0;
+		i2c_reg_settings->is_settings_valid = 1;
+
+		rc = cam_sensor_apply_settings(s_ctrl, 0,
+				CAM_SENSOR_PACKET_OPCODE_SENSOR_WRITE);
+
+		s_ctrl->i2c_data.write_settings.request_id = -1;
+
+		if (rc < 0) {
+			CAM_ERR(CAM_SENSOR, "Cannot apply write settings");
+			goto end;
+		}
+
+		/* Delete the request even if the apply is failed */
+		rc = delete_request(&s_ctrl->i2c_data.write_settings);
+		if (rc < 0) {
+			CAM_WARN(CAM_SENSOR,
+				"Fail in deleting the write settings");
+			rc = 0;
+		}
+		break;
+	}
 	case CAM_SENSOR_PACKET_OPCODE_SENSOR_NOP: {
 		if ((s_ctrl->sensor_state == CAM_SENSOR_INIT) ||
 			(s_ctrl->sensor_state == CAM_SENSOR_ACQUIRE)) {
@@ -1047,7 +1081,7 @@ int cam_sensor_stream_off(struct cam_sensor_ctrl_t *s_ctrl)
 	cam_sensor_release_per_frame_resource(s_ctrl);
 	s_ctrl->last_flush_req = 0;
 	s_ctrl->sensor_state = CAM_SENSOR_ACQUIRE;
-	memset(s_ctrl->sensor_res, 0, sizeof(s_ctrl->sensor_res));
+	memset(&s_ctrl->sensor_res, 0, sizeof(s_ctrl->sensor_res));
 
 	CAM_GET_TIMESTAMP(ts);
 	CAM_CONVERT_TIMESTAMP_FORMAT(ts, hrs, min, sec, ms);
@@ -1282,7 +1316,9 @@ int32_t cam_sensor_driver_cmd(struct cam_sensor_ctrl_t *s_ctrl,
 			goto release_mutex;
 		}
 
+		lock_power_sync_mutex(s_ctrl->io_master_info.cci_client->cci_device, s_ctrl->cci_i2c_master);
 		rc = cam_sensor_power_up(s_ctrl);
+		unlock_power_sync_mutex(s_ctrl->io_master_info.cci_client->cci_device, s_ctrl->cci_i2c_master);
 		if (rc < 0) {
 			CAM_ERR(CAM_SENSOR,
 				"Sensor Power up failed for %s sensor_id:0x%x, slave_addr:0x%x",
@@ -1858,6 +1894,10 @@ int cam_sensor_apply_settings(struct cam_sensor_ctrl_t *s_ctrl,
 			i2c_set = &s_ctrl->i2c_data.reg_bank_lock_settings;
 			break;
 		}
+		case CAM_SENSOR_PACKET_OPCODE_SENSOR_WRITE: {
+			i2c_set = &s_ctrl->i2c_data.write_settings;
+			break;
+		}
 		case CAM_SENSOR_PACKET_OPCODE_SENSOR_UPDATE:
 		case CAM_SENSOR_PACKET_OPCODE_SENSOR_FRAME_SKIP_UPDATE:
 		case CAM_SENSOR_PACKET_OPCODE_SENSOR_PROBE:
@@ -1876,6 +1916,15 @@ int cam_sensor_apply_settings(struct cam_sensor_ctrl_t *s_ctrl,
 						trace_cam_i2c_write_log_event("[SENSORSETTINGS]", s_ctrl->sensor_name,
 						req_id, j, "WRITE", i2c_list->i2c_settings.reg_setting[j].reg_addr,
 						i2c_list->i2c_settings.reg_setting[j].reg_data);
+
+						if (0x3010 == i2c_list->i2c_settings.reg_setting[j].reg_addr) {
+							CAM_WARN(CAM_SENSOR,"_DBG_ sensorname[%s] [%04d] [CDBG] 0x%04X 0x%04X 0x%02X reqid %d", 
+								s_ctrl->sensor_name, j,
+								i2c_list->i2c_settings.reg_setting[j].reg_addr,
+								i2c_list->i2c_settings.reg_setting[j].reg_data,
+								i2c_list->i2c_settings.reg_setting[j].delay,
+								req_id);
+						}
 					}
 					break;
 				}
@@ -1965,6 +2014,7 @@ int cam_sensor_apply_settings(struct cam_sensor_ctrl_t *s_ctrl,
 		}
 
 		s_ctrl->last_applied_req = req_id;
+
 		CAM_DBG(CAM_REQ,
 			"Sensor[%d] updating last_applied [req id: %lld last_applied: %lld] with opcode:%d",
 			s_ctrl->soc_info.index, req_id, s_ctrl->last_applied_req, opcode);

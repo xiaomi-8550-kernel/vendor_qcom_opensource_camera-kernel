@@ -27,7 +27,7 @@
 #include "cam_soc_util.h"
 #include "cam_debug_util.h"
 #include "cam_context.h"
-#include "cam_actuator_parklens_thread.h"
+#include "cam_parklens_thread.h"
 
 #define NUM_MASTERS 2
 #define NUM_QUEUES 2
@@ -125,6 +125,7 @@ struct cam_actuator_ctrl_t {
 	uint32_t last_flush_req;
 	void *cci_debug;
 	struct cam_actuator_parklens_ctrl_t parklens_ctrl;
+	uint32_t cci_io_fail_count;
 };
 
 /**

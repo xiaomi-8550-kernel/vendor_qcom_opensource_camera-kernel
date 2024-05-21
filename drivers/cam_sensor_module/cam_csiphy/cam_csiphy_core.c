@@ -32,6 +32,7 @@
  * changes depending on PHY HW version
  */
 #define CAM_MAX_PHYS_PER_CP_CTRL_REG 4
+uint64_t xm_mipi_kmd_setting = 0;
 
 static DEFINE_MUTEX(active_csiphy_cnt_mutex);
 static DEFINE_MUTEX(main_aon_selection);
@@ -161,6 +162,7 @@ static void cam_csiphy_reset_phyconfig_param(struct csiphy_device *csiphy_dev,
 	csiphy_dev->csiphy_info[index].mipi_flags = 0;
 	csiphy_dev->csiphy_info[index].hdl_data.device_hdl = -1;
 	csiphy_dev->csiphy_info[index].csiphy_3phase = -1;
+	csiphy_dev->csiphy_info[index].is_modify_onthego = false;
 }
 
 static inline void cam_csiphy_apply_onthego_reg_values(void __iomem *csiphybase, uint8_t csiphy_idx)
@@ -767,6 +769,9 @@ static int __cam_csiphy_parse_lane_info_cmd_buf(
 	csiphy_dev->csiphy_info[index].mipi_flags =
 		(cam_cmd_csiphy_info->mipi_flags & SKEW_CAL_MASK);
 
+	csiphy_dev->csiphy_info[index].is_modify_onthego =
+		cam_cmd_csiphy_info->is_modify_onthego;
+
 	lane_assign = csiphy_dev->csiphy_info[index].lane_assign;
 	lane_cnt = csiphy_dev->csiphy_info[index].lane_cnt;
 
@@ -1095,6 +1100,60 @@ static inline void __cam_csiphy_compute_cdr_value(
 		*cdr_val -= csiphy_device->cdr_params.cdr_tolerance;
 }
 
+static void XM_MIPI_KMD_GET_CTRL_FLAG_VAL(int ctl_no, u8 *flag, u8 *val)
+{
+	u8 *p1;
+	u8 *p2;
+
+	p1 = flag;
+	p2 = val;
+
+	*p1 = XM_MIPI_KMD_GET_CTRL_FLAG(ctl_no);
+	*p2 = XM_MIPI_KMD_GET_CTRL_VAL(ctl_no);
+
+	return ;
+}
+
+static int cam_csiphy_cphy_reconfig_work(struct csiphy_device *csiphy_device, struct data_rate_reg_info_t *drate_settings)
+{
+	const char *p = NULL;
+	u8 phy_index = 0;
+	u8 phy_flag = 0;
+	u8 phy_val = 0;
+	int ret = 0;
+	int skip_current_setting = 0;
+
+	if ((!csiphy_device) || (!drate_settings)) {
+		skip_current_setting = 0;
+		return skip_current_setting;
+	}
+	if ((csiphy_device->device_has_customized == 1) && (drate_settings->this_setting_max_choice != 0)) {
+		if (strcmp(csiphy_device->phy_dts_name, "qcom,csiphy-v2.1.2-m18") == 0) {
+			p = csiphy_device->device_name;
+			p += strlen(csiphy_device->device_name) - 1;
+			ret = kstrtou8(p, 0, &phy_index);
+			XM_MIPI_KMD_GET_CTRL_FLAG_VAL(phy_index, &phy_flag, &phy_val);
+			CAM_INFO(CAM_ISP, "phy_index[%d], flag=[%d], val=[%d], max_choice[%d], ret %d", phy_index, phy_flag, phy_val, drate_settings->this_setting_max_choice, ret);
+			if (phy_flag) {
+				// exceed the max choice, using the 1st setting, so don't skip this setting;
+				if (phy_val >= drate_settings->this_setting_max_choice) {
+					skip_current_setting = 0;
+				} else {
+					if (phy_val != drate_settings->this_setting_current_choice) {
+						skip_current_setting = 1;// continue...
+					} else {
+						skip_current_setting = 0;// find the backup one
+					}
+				}
+			}
+		} else {
+			// default is using the 1st setting;
+			skip_current_setting = 0;
+		}
+	}
+	return skip_current_setting;
+}
+
 static int cam_csiphy_cphy_data_rate_config(struct csiphy_device *csiphy_device, int32_t idx,
 	uint8_t datarate_variant_idx)
 {
@@ -1146,6 +1205,18 @@ static int cam_csiphy_cphy_data_rate_config(struct csiphy_device *csiphy_device,
 			continue;
 		}
 
+		if (cam_csiphy_cphy_reconfig_work(csiphy_device, &drate_settings[data_rate_idx]) == 1) {
+			CAM_INFO(CAM_CSIPHY,
+				"double Skipping table [%d] with BW: %llu, Required data_rate: %llu",
+				data_rate_idx, supported_phy_bw, required_phy_data_rate);
+			continue;
+		}
+
+		CAM_INFO(CAM_CSIPHY,
+				"table [%d] with BW: %llu, Required data_rate: %llu, max.using[%d.%d]",
+				data_rate_idx, supported_phy_bw, required_phy_data_rate,
+				drate_settings[data_rate_idx].this_setting_max_choice, drate_settings[data_rate_idx].this_setting_current_choice);
+
 		CAM_DBG(CAM_CSIPHY, "table[%d] BW : %llu Selected",
 			data_rate_idx, supported_phy_bw);
 
@@ -1193,13 +1264,16 @@ static int cam_csiphy_cphy_data_rate_config(struct csiphy_device *csiphy_device,
 			case CSIPHY_AUXILIARY_SETTING: {
 				uint32_t phy_idx = csiphy_device->soc_info.index;
 
-				if (g_phy_data[phy_idx].data_rate_aux_mask &
-					BIT_ULL(data_rate_idx)) {
+				if ((g_phy_data[phy_idx].data_rate_aux_mask &
+					BIT_ULL(data_rate_idx)) &&
+						(csiphy_device->csiphy_info[idx].is_modify_onthego == true)) {
 					cam_io_w_mb(reg_data, csiphybase + reg_addr);
 					CAM_DBG(CAM_CSIPHY,
 						"CSIPHY: %u configuring new aux setting reg_addr: 0x%x reg_val: 0x%x",
 						csiphy_device->soc_info.index, reg_addr, reg_data);
 				}
+				CAM_DBG(CAM_CSIPHY, "crcdebug: is_modify_onthego: %d",
+						csiphy_device->csiphy_info[idx].is_modify_onthego);
 			}
 			break;
 			case CSIPHY_CDR_LN_SETTINGS: {

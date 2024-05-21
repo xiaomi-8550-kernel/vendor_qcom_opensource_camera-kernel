@@ -22,6 +22,10 @@ struct cam_context;
 /* max device name string length*/
 #define CAM_CTX_DEV_NAME_MAX_LENGTH 20
 
+/* mipi phy backup setting */
+#define CAM_PHY_MAX_CTRL_NO 8
+#define CAM_PHY_DTS_NAME 50
+
 /* max request number */
 #define CAM_CTX_REQ_MAX              20
 #define CAM_CTX_ICP_REQ_MAX          40

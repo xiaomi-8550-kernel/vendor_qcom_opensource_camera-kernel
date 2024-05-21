@@ -475,6 +475,8 @@ struct cam_req_mgr_core_link {
 	uint32_t                             cont_empty_slots;
 	bool                                 is_shdr;
 	bool                                 wait_for_dual_trigger;
+	bool                                 print_on;
+	uint32_t                             rdi_mismatch_retry;
 	struct cam_req_mgr_debug_data        debug_data;
 };
 

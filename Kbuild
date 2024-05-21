@@ -216,7 +216,7 @@ camera-$(CONFIG_SPECTRA_SENSOR) += \
 	drivers/cam_sensor_module/cam_actuator/cam_actuator_core.o \
 	drivers/cam_sensor_module/cam_actuator/cam_actuator_soc.o \
 	drivers/cam_sensor_module/cam_cci/cam_cci_debug_util.o \
-	drivers/cam_sensor_module/cam_actuator/cam_actuator_parklens_thread.o \
+	drivers/cam_sensor_module/cam_sensor_utils/cam_parklens_thread.o \
 	drivers/cam_sensor_module/cam_cci/cam_cci_dev.o \
 	drivers/cam_sensor_module/cam_cci/cam_cci_core.o \
 	drivers/cam_sensor_module/cam_cci/cam_cci_soc.o \
@@ -235,6 +235,7 @@ camera-$(CONFIG_SPECTRA_SENSOR) += \
 	drivers/cam_sensor_module/cam_ois/cam_ois_dev.o \
 	drivers/cam_sensor_module/cam_ois/cam_ois_core.o \
 	drivers/cam_sensor_module/cam_ois/cam_ois_soc.o \
+	drivers/cam_sensor_module/cam_ois/sem1217s.o \
 	drivers/cam_sensor_module/cam_sensor/cam_sensor_dev.o \
 	drivers/cam_sensor_module/cam_sensor/cam_sensor_core.o \
 	drivers/cam_sensor_module/cam_sensor/cam_sensor_soc.o \

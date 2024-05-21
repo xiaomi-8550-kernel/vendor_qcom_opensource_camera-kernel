@@ -2445,8 +2445,7 @@ static int cam_cpas_log_vote(struct cam_hw_info *cpas_hw, bool ddr_only)
 		 * i=0 for DDR, i=4 for mnoc, but double check for each chipset.
 		 */
 		for (i = 0; i < rpmh_info[CAM_RPMH_NUMBER_OF_BCMS]; i++) {
-			if ((!cpas_core->full_state_dump) &&
-				(i != ddr_bcm_index) &&
+			if ((i != ddr_bcm_index) &&
 				(i != mnoc_bcm_index))
 				continue;
 
@@ -2508,11 +2507,6 @@ static int cam_cpas_log_vote(struct cam_hw_info *cpas_hw, bool ddr_only)
 
 	CAM_INFO(CAM_CPAS, "ahb client curr vote level[%d]",
 		cpas_core->ahb_bus_client.curr_vote_level);
-
-	if (!cpas_core->full_state_dump) {
-		CAM_DBG(CAM_CPAS, "CPAS full state dump not enabled");
-		return 0;
-	}
 
 	/* This will traverse through all nodes in the tree and print stats*/
 	for (i = 0; i < CAM_CPAS_MAX_TREE_NODES; i++) {
@@ -2696,9 +2690,6 @@ static void cam_cpas_dump_monitor_array(
 	struct timespec64 curr_timestamp;
 	char log_buf[CAM_CPAS_LOG_BUF_LEN];
 	size_t len;
-
-	if (!cpas_core->full_state_dump)
-		return;
 
 	state_head = atomic64_read(&cpas_core->monitor_head);
 
@@ -3548,7 +3539,7 @@ int cam_cpas_hw_probe(struct platform_device *pdev,
 		return -ENOMEM;
 	}
 
-	cpas_core = cam_retry_kzalloc(__func__, __LINE__, sizeof(struct cam_cpas), GFP_KERNEL | __GFP_RETRY_MAYFAIL);
+	cpas_core = kzalloc(sizeof(struct cam_cpas), GFP_KERNEL | __GFP_NOFAIL);
 	if (!cpas_core) {
 		kfree(cpas_hw);
 		kfree(cpas_hw_intf);
@@ -3567,7 +3558,7 @@ int cam_cpas_hw_probe(struct platform_device *pdev,
 	cpas_hw->soc_info.dev_name = pdev->name;
 	cpas_hw->open_count = 0;
 	cpas_core->ahb_bus_scaling_disable = false;
-	cpas_core->full_state_dump = false;
+	cpas_core->full_state_dump = true;
 	cpas_core->smart_qos_dump = false;
 
 	atomic64_set(&cpas_core->monitor_head, -1);

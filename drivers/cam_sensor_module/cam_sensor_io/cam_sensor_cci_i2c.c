@@ -210,6 +210,12 @@ int32_t cam_cci_i2c_poll(struct cam_sensor_cci_client *client,
 		if (!rc)
 			return rc;
 
+		if(rc < 0) {
+			CAM_ERR(CAM_SENSOR, "rc %d, addr: 0x%x data: 0x%x dt: %d delay_ms %d",
+				rc, addr, data, data_type, delay_ms);
+			break;
+		}
+
 		usleep_range(1000, 1010);
 	}
 

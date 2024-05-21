@@ -36,4 +36,15 @@ int32_t cam_cci_core_cfg(struct v4l2_subdev *sd,
  */
 irqreturn_t cam_cci_irq(int irq_num, void *data);
 
+/**
+ * @cci_dev: CCI device structure
+ * @master: current CCI master
+ * @queue: current CCI queue
+ *
+ * This API handles CCI cmds dump
+ */
+void cam_cci_cmds_dump(struct cci_device *cci_dev,
+	enum cci_i2c_master_t master,
+	enum cci_i2c_queue_t queue);
+
 #endif /* _CAM_CCI_CORE_H_ */

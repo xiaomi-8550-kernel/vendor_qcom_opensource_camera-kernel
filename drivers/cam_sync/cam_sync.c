@@ -460,12 +460,16 @@ int cam_sync_get_obj_ref(int32_t sync_obj)
 
 	spin_lock(&sync_dev->row_spinlocks[sync_obj]);
 
-	if (row->state != CAM_SYNC_STATE_ACTIVE) {
+	if (row->state == CAM_SYNC_STATE_SIGNALED_SUCCESS && !atomic_read(&row->ref_cnt)) {
+		CAM_INFO(CAM_SYNC, "the obj have been signaled, ref_cnt %d", atomic_read(&row->ref_cnt));
+		row->state = CAM_SYNC_STATE_ACTIVE;
+	}
+	else if (row->state != CAM_SYNC_STATE_ACTIVE) {
 		spin_unlock(&sync_dev->row_spinlocks[sync_obj]);
 		CAM_ERR(CAM_SYNC,
-			"Error: accessing an uninitialized sync obj = %s[%d]",
+			"Error: accessing an uninitialized sync obj = %s[%d] state %d",
 			row->name,
-			sync_obj);
+			sync_obj, row->state);
 		return -EINVAL;
 	}
 
@@ -1907,7 +1911,7 @@ static int cam_sync_component_bind(struct device *dev,
 	int idx;
 	struct platform_device *pdev = to_platform_device(dev);
 
-	sync_dev = cam_retry_kzalloc(__func__, __LINE__, sizeof(*sync_dev), GFP_KERNEL | __GFP_RETRY_MAYFAIL);
+	sync_dev = kzalloc(sizeof(*sync_dev), GFP_KERNEL | __GFP_NOFAIL);
 	if (!sync_dev)
 		return -ENOMEM;
 

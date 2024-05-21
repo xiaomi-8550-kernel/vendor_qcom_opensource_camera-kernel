@@ -56,6 +56,8 @@
 #define CCI_I2C_MAX_WRITE 20480
 #define CCI_I2C_MAX_BYTE_COUNT 65535
 
+#define CCI_I2C_CMDS_SNAPSHOT_MAX_COUNT 128
+
 #define CAMX_CCI_DEV_NAME "cam-cci-driver"
 
 #define CAM_CCI_WORKQUEUE_NAME "cam_cci_wq"
@@ -142,6 +144,9 @@ struct cam_cci_master_info {
 	uint16_t freq_ref_cnt;
 	bool is_initilized;
 	struct mutex master_mutex;
+	uint32_t cci_write_cmds_pos_start;
+	uint32_t cci_write_cmds_pos_current;
+	uint32_t *cci_write_cmds;
 };
 
 struct cam_cci_clk_params_t {

@@ -11,7 +11,7 @@
 #include "cam_trace.h"
 #include "cam_common_util.h"
 #include "cam_packet_util.h"
-#include "cam_actuator_parklens_thread.h"
+#include "cam_parklens_thread.h"
 
 #define MAX_RETRY_TIMES 3
 
@@ -313,22 +313,44 @@ int32_t cam_actuator_apply_settings(struct cam_actuator_ctrl_t *a_ctrl,
 		default:
 			break;
 		}
+
+		if (a_ctrl->cci_io_fail_count > MAX_CCI_IO_FAIL_TIMES)
+		{
+			CAM_WARN(CAM_ACTUATOR,
+					"Fail:request ID: %d, The actuator may be faulty, skip apply settings!",
+					i2c_set->request_id);
+			return rc;
+		}
+
 		rc = cam_actuator_i2c_modes_util(
 			&(a_ctrl->io_master_info),
 			i2c_list);
 		if (rc < 0) {
+			a_ctrl->cci_io_fail_count++;
 			CAM_WARN(CAM_ACTUATOR,
-				"Failed to apply settings: %d",
-				rc);
+				"Failed to apply settings: rc=%d, fail count:%d",
+				rc, a_ctrl->cci_io_fail_count);
+
 			for (i = 0; i < MAX_RETRY_TIMES; i++) {
 				usleep_range(1000, 1010);
+				if (a_ctrl->cci_io_fail_count > MAX_CCI_IO_FAIL_TIMES) {
+					CAM_WARN(CAM_ACTUATOR,
+							"Fail:request ID: %d, The actuator may be faulty, skip apply settings!",
+							i2c_set->request_id);
+					rc = 0;
+					break;
+				}
+
 				rc = cam_actuator_i2c_modes_util(
 					&(a_ctrl->io_master_info),
 					i2c_list);
 				if(rc < 0){
+					a_ctrl->cci_io_fail_count++;
 					CAM_WARN(CAM_ACTUATOR,
-					"Failed to apply settings: %d times:%d",rc,i);
+							"Failed to apply settings: %d  retry times:%d, fail count:%d(max:%d)",
+							rc, i, a_ctrl->cci_io_fail_count, MAX_CCI_IO_FAIL_TIMES);
 				}else{
+					a_ctrl->cci_io_fail_count = 0;
 					break;
 				}
 			}
@@ -672,6 +694,7 @@ int32_t cam_actuator_i2c_pkt_parse(struct cam_actuator_ctrl_t *a_ctrl,
 						CAM_ERR(CAM_ACTUATOR,
 							"Failed:parse power settings: %d",
 							rc);
+						cam_mem_put_cpu_buf(cmd_desc[i].mem_handle);
 						goto end;
 					}
 				} else {
@@ -703,9 +726,13 @@ int32_t cam_actuator_i2c_pkt_parse(struct cam_actuator_ctrl_t *a_ctrl,
 			}
 			cam_mem_put_cpu_buf(cmd_desc[i].mem_handle);
 		}
+		if (0 == (csl_packet->num_cmd_buf)) {
+			CAM_ERR(CAM_ACTUATOR, "num_cmd_buf is zero!");
+		}
 
 		if (a_ctrl->cam_act_state == CAM_ACTUATOR_ACQUIRE) {
 			if (parklens_power_down == true) {
+				a_ctrl->cci_io_fail_count = 0;
 				rc = cam_actuator_power_up(a_ctrl);
 				if (rc < 0) {
 					CAM_ERR(CAM_ACTUATOR,
@@ -901,6 +928,7 @@ int32_t cam_actuator_i2c_pkt_parse(struct cam_actuator_ctrl_t *a_ctrl,
 		break;
 		}
 	case CAM_ACTUATOR_PACKET_OPCODE_PARKLENS: {
+		int32_t exit_result = parklens_atomic_read(&(a_ctrl->parklens_ctrl.exit_result));
 		CAM_INFO(MI_PARKLENS,
 			"Received parklens buffer");
 
@@ -910,9 +938,11 @@ int32_t cam_actuator_i2c_pkt_parse(struct cam_actuator_ctrl_t *a_ctrl,
 			(a_ctrl->cam_act_state < CAM_ACTUATOR_CONFIG)) {
 			rc = -EINVAL;
 			CAM_WARN(MI_PARKLENS,
-				"Not in right state to do parklens: %d/%d",
+				"Not in right state to do parklens: %d/%d, exit result %d release power control right",
 				a_ctrl->cam_act_state,
-				parklens_state);
+				parklens_state, exit_result);
+			parklens_thread_stop(a_ctrl, EXIT_PARKLENS_WITH_POWERDOWN);
+			deinit_parklens_info(a_ctrl);
 			goto end;
 		}
 
@@ -937,6 +967,50 @@ int32_t cam_actuator_i2c_pkt_parse(struct cam_actuator_ctrl_t *a_ctrl,
 
 		parklens_thread_trigger(a_ctrl);
 
+		break;
+	}
+	case CAM_ACTUATOR_PACKET_OPCODE_WRITE: {
+		if (a_ctrl->cam_act_state < CAM_ACTUATOR_CONFIG) {
+			rc = -EINVAL;
+			CAM_WARN(CAM_ACTUATOR,
+				"Not in right state to write actuator: %d",
+				a_ctrl->cam_act_state);
+			goto end;
+		}
+		CAM_DBG(CAM_ACTUATOR, "Received write buffer");
+
+		i2c_data = &(a_ctrl->i2c_data);
+		i2c_reg_settings = &i2c_data->write_settings;
+
+		i2c_data->write_settings.request_id = 0;
+		i2c_reg_settings->is_settings_valid = 1;
+		offset = (uint32_t *)&csl_packet->payload;
+		offset += csl_packet->cmd_buf_offset / sizeof(uint32_t);
+		cmd_desc = (struct cam_cmd_buf_desc *)(offset);
+		rc = cam_sensor_i2c_command_parser(
+				&a_ctrl->io_master_info,
+				i2c_reg_settings,
+				cmd_desc, 1, NULL);
+		if (rc < 0) {
+			CAM_ERR(CAM_ACTUATOR,
+				"write setting parsing failed: %d", rc);
+			goto end;
+		}
+
+		rc = cam_actuator_apply_settings(a_ctrl,
+			&a_ctrl->i2c_data.write_settings);
+		if (rc < 0) {
+			CAM_ERR(CAM_ACTUATOR, "Cannot apply write settings");
+			goto end;
+		}
+
+		/* Delete the request even if the apply is failed */
+		rc = delete_request(&a_ctrl->i2c_data.write_settings);
+		if (rc < 0) {
+			CAM_WARN(CAM_ACTUATOR,
+				"Fail in deleting the Init settings");
+			rc = 0;
+		}
 		break;
 	}
 	default:
@@ -976,7 +1050,7 @@ void cam_actuator_shutdown(struct cam_actuator_ctrl_t *a_ctrl)
 		return;
 
 	if (a_ctrl->cam_act_state >= CAM_ACTUATOR_CONFIG) {
-		if(false == is_parklens_power_down(a_ctrl)) {
+		if(!is_parklens_power_down(a_ctrl)) {
 			rc = cam_actuator_power_down(a_ctrl);
 			if (rc < 0)
 				CAM_ERR(CAM_ACTUATOR, "Actuator Power down failed");
@@ -1113,6 +1187,7 @@ int32_t cam_actuator_driver_cmd(struct cam_actuator_ctrl_t *a_ctrl,
 		}
 
 		parklens_power_down = is_parklens_power_down(a_ctrl);
+		CAM_INFO(MI_PARKLENS, "CAM_RELEASE_DEV is_parklens_power_down status %d", parklens_power_down);
 		if (a_ctrl->cam_act_state == CAM_ACTUATOR_CONFIG) {
 			if (parklens_power_down == false) {
 				rc = cam_actuator_power_down(a_ctrl);
@@ -1438,6 +1513,16 @@ static int32_t parklens_thread_func(void *arg)
 					sleeptime = PARKLENS_SLEEPTIME;
 				i2c_list->i2c_settings.delay = 0;
 
+				if (a_ctrl->cci_io_fail_count > MAX_CCI_IO_FAIL_TIMES) {
+					CAM_WARN(CAM_ACTUATOR,
+							"The actuator may be faulty, skip apply settings!");
+					rc=-EINVAL;
+					parklens_atomic_set(
+						&(parklens_ctrl->exit_result),
+						PARKLENS_EXIT_CCI_ERROR);
+					goto exit_with_powerdown;
+				}
+
 				rc = cam_actuator_i2c_modes_util(
 					&(a_ctrl->io_master_info),
 					i2c_list);
@@ -1461,6 +1546,13 @@ static int32_t parklens_thread_func(void *arg)
 						i2c_list->i2c_settings.reg_setting[i].reg_data,
 						i2c_list->i2c_settings.delay);
 				}
+				if (0 == parklens_step)
+				{
+					CAM_DBG(MI_PARKLENS, "parklens step exceed! power down");
+					parklens_atomic_set(
+						&(parklens_ctrl->exit_result),
+						PARKLENS_EXIT_WITH_POWEDOWN);
+				}
 			}
 		}
 
@@ -1477,7 +1569,10 @@ exit_with_powerdown:
 		"parklens thread exit step/result %d/%d",
 		parklens_step,
 		parklens_atomic_read(&(parklens_ctrl->exit_result)));
+
+	lock_power_sync_mutex(a_ctrl->io_master_info.cci_client->cci_device, a_ctrl->cci_i2c_master);
 	rc = cam_actuator_power_down(a_ctrl);
+	unlock_power_sync_mutex(a_ctrl->io_master_info.cci_client->cci_device, a_ctrl->cci_i2c_master);
 	if (rc < 0) {
 		CAM_DBG(MI_PARKLENS,
 			"parklens power down failed rc: %d", rc);

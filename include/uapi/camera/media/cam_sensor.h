@@ -66,7 +66,8 @@ enum cam_actuator_packet_opcodes {
 	CAM_ACTUATOR_PACKET_AUTO_MOVE_LENS,
 	CAM_ACTUATOR_PACKET_MANUAL_MOVE_LENS,
 	CAM_ACTUATOR_PACKET_OPCODE_READ,
-	CAM_ACTUATOR_PACKET_OPCODE_PARKLENS
+	CAM_ACTUATOR_PACKET_OPCODE_PARKLENS,
+	CAM_ACTUATOR_PACKET_OPCODE_WRITE
 };
 
 enum cam_eeprom_packet_opcodes {
@@ -78,7 +79,10 @@ enum cam_ois_packet_opcodes {
 	CAM_OIS_PACKET_OPCODE_INIT,
 	CAM_OIS_PACKET_OPCODE_OIS_CONTROL,
 	CAM_OIS_PACKET_OPCODE_READ,
-	CAM_OIS_PACKET_OPCODE_WRITE_TIME
+	CAM_OIS_PACKET_OPCODE_WRITE_TIME,
+	CAM_OIS_PACKET_OPCODE_OIS_MANUAL_MODE,
+	CAM_OIS_PACKET_OPCODE_INIT_SECOND,
+	CAM_OIS_PACKET_OPCODE_OIS_PARKLENS,
 };
 
 enum camera_sensor_i2c_op_code {
@@ -120,6 +124,7 @@ enum cam_sensor_packet_opcodes {
 	CAM_SENSOR_PACKET_OPCODE_SENSOR_REG_BANK_UNLOCK,
 	CAM_SENSOR_PACKET_OPCODE_SENSOR_REG_BANK_LOCK,
 	CAM_SENSOR_PACKET_OPCODE_SENSOR_BUBBLE_UPDATE,
+	CAM_SENSOR_PACKET_OPCODE_SENSOR_WRITE,
 	CAM_SENSOR_PACKET_OPCODE_SENSOR_NOP = 127,
 };
 
@@ -364,6 +369,8 @@ struct cam_ois_opcode {
 	__u32 memory;
 	__u8 fw_addr_type;
 	__u8 is_addr_increase;
+	__u16 fw_download_type;
+	__u32 fw_version;
 	__u8 customized_ois_flag;
 } __attribute__((packed));
 
@@ -660,6 +667,7 @@ struct cam_csiphy_info {
 	__u8     secure_mode;
 	__u64    settle_time;
 	__u64    data_rate;
+	bool     is_modify_onthego;
 } __attribute__((packed));
 
 /**

@@ -765,7 +765,7 @@ static int cam_jpeg_mgr_process_hw_update_entries(void *priv, void *data)
 		goto end;
 	}
 
-	if (false == hw_mgr->device_in_use[p_cfg_req->dev_type][0]) {
+	if (!hw_mgr->device_in_use[p_cfg_req->dev_type][0]) {
 		hw_mgr->device_in_use[p_cfg_req->dev_type][0] = true;
 		hw_mgr->dev_hw_cfg_args[p_cfg_req->dev_type][0] = p_cfg_req;
 		list_del_init(&p_cfg_req->list);
@@ -1848,7 +1848,7 @@ static int cam_jpeg_mgr_hw_dump(void *hw_mgr_priv, void *dump_hw_args)
 
 	dev_type = ctx_data->jpeg_dev_acquire_info.dev_type;
 
-	if (true == hw_mgr->device_in_use[dev_type][0]) {
+	if (hw_mgr->device_in_use[dev_type][0]) {
 		p_cfg_req = hw_mgr->dev_hw_cfg_args[dev_type][0];
 		if (p_cfg_req  && p_cfg_req->req_id ==
 			    (uintptr_t)dump_args->request_id)
