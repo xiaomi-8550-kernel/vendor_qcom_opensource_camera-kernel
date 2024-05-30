@@ -58,6 +58,12 @@ static int __cam_isp_ctx_check_deferred_buf_done(
 	struct cam_isp_hw_done_event_data *done,
 	uint32_t bubble_state);
 
+// xiaomi add
+static int __cam_isp_notify_mqs_event(
+	uint32_t error_type, uint32_t error_code,
+	uint64_t error_request_id, struct cam_context *ctx);
+// xiaomi add
+
 static const char *__cam_isp_evt_val_to_type(
 	uint32_t evt_id)
 {
@@ -644,21 +650,25 @@ static int __cam_isp_ctx_notify_trigger_util(
 	notify.req_id = ctx_isp->req_info.last_bufdone_req_id;
 	notify.sof_timestamp_val = ctx_isp->sof_timestamp_val;
 	notify.trigger_id = ctx_isp->trigger_id;
+	notify.process_rdi_mismatch = ctx_isp->process_rdi_mismatch;
+	notify.request_mismatched = ctx_isp->request_mismatched;
+	notify.ctx_mismatched = ctx_isp->ctx_mismatched;
 
 	CAM_DBG(CAM_ISP,
-		"Notify CRM %s on frame: %llu ctx: %u link: 0x%x last_buf_done_req: %lld",
+		"Notify CRM %s on frame: %llu ctx: %u link: 0x%x last_buf_done_req: %lld process_rdi_mismatch %d request_mismatched %lld ctx_mismatched %d",
 		__cam_isp_ctx_crm_trigger_point_to_string(trigger_type),
 		ctx_isp->frame_id, ctx->ctx_id, ctx->link_hdl,
-		ctx_isp->req_info.last_bufdone_req_id);
+		ctx_isp->req_info.last_bufdone_req_id, notify.process_rdi_mismatch,
+		notify.request_mismatched, notify.ctx_mismatched);
 
 	rc = ctx->ctx_crm_intf->notify_trigger(&notify);
 	if (rc)
-		CAM_ERR(CAM_ISP,
+		//xiaomi Change CAM_ERR to CAM_ERR_RATE_LIMIT
+		CAM_ERR_RATE_LIMIT(CAM_ISP,
 			"Failed to notify CRM %s on frame: %llu ctx: %u link: 0x%x last_buf_done_req: %lld rc: %d",
 			__cam_isp_ctx_crm_trigger_point_to_string(trigger_type),
 			ctx_isp->frame_id, ctx->ctx_id, ctx->link_hdl,
 			ctx_isp->req_info.last_bufdone_req_id, rc);
-
 	return rc;
 }
 
@@ -1517,7 +1527,24 @@ static int __cam_isp_ctx_handle_buf_done_for_req_list(
 	ctx_isp->active_req_cnt--;
 	buf_done_req_id = req->request_id;
 
-	if (req_isp->bubble_detected && req_isp->bubble_report) {
+	if ((TRUE == ctx_isp->process_rdi_mismatch) && 
+		(buf_done_req_id == ctx_isp->request_mismatched) && 
+		(ctx->ctx_id == ctx_isp->ctx_mismatched)) {
+
+		req_isp->num_acked = 0;
+		req_isp->num_deferred_acks = 0;
+		list_del_init(&req->list);
+		req_isp->cdm_reset_before_apply = false;
+
+		ctx_isp->process_rdi_mismatch = FALSE;
+
+		list_add(&req->list, &ctx->pending_req_list);
+
+		CAM_DBG(CAM_REQ,
+			"_DBG_ Move active request %lld to pending list(cnt = %d) [rdi mismatch], ctx %u",
+			req->request_id, ctx_isp->active_req_cnt,
+			ctx->ctx_id);
+	} else if (req_isp->bubble_detected && req_isp->bubble_report) {
 		req_isp->num_acked = 0;
 		req_isp->num_deferred_acks = 0;
 		req_isp->bubble_detected = false;
@@ -1525,6 +1552,9 @@ static int __cam_isp_ctx_handle_buf_done_for_req_list(
 		atomic_set(&ctx_isp->process_bubble, 0);
 		req_isp->cdm_reset_before_apply = false;
 		ctx_isp->bubble_frame_cnt = 0;
+		ctx_isp->process_rdi_mismatch = FALSE;
+		ctx_isp->request_mismatched = -3;
+		ctx_isp->ctx_mismatched = -3;
 
 		if (buf_done_req_id <= ctx->last_flush_req) {
 			for (i = 0; i < req_isp->num_fence_map_out; i++)
@@ -1534,14 +1564,14 @@ static int __cam_isp_ctx_handle_buf_done_for_req_list(
 					CAM_SYNC_ISP_EVENT_BUBBLE);
 
 			list_add_tail(&req->list, &ctx->free_req_list);
-			CAM_DBG(CAM_REQ,
+			CAM_WARN(CAM_REQ,
 				"Move active request %lld to free list(cnt = %d) [flushed], ctx %u",
 				buf_done_req_id, ctx_isp->active_req_cnt,
 				ctx->ctx_id);
 			ctx_isp->last_bufdone_err_apply_req_id = 0;
 		} else {
 			list_add(&req->list, &ctx->pending_req_list);
-			CAM_DBG(CAM_REQ,
+			CAM_WARN(CAM_REQ,
 				"Move active request %lld to pending list(cnt = %d) [bubble recovery], ctx %u",
 				req->request_id, ctx_isp->active_req_cnt,
 				ctx->ctx_id);
@@ -1572,9 +1602,22 @@ static int __cam_isp_ctx_handle_buf_done_for_req_list(
 			req_isp->bubble_detected = false;
 		}
 
+		if ((buf_done_req_id == ctx_isp->request_mismatched) &&
+			(ctx->ctx_id == ctx_isp->ctx_mismatched)) {
+			CAM_WARN(CAM_REQ,
+				"_DBG_ Move active request %lld to free list(cnt = %d) [all fences done], ctx %u, process_rdi_mismatch %d, request_mismatched %lld, ctx_mismatched %d",
+				buf_done_req_id, ctx_isp->active_req_cnt, ctx->ctx_id, 
+				ctx_isp->process_rdi_mismatch, ctx_isp->request_mismatched, ctx_isp->ctx_mismatched);
+
+			ctx_isp->process_rdi_mismatch = FALSE;
+			ctx_isp->request_mismatched = -2;
+			ctx_isp->ctx_mismatched = -2;
+		}
+
 		CAM_DBG(CAM_REQ,
-			"Move active request %lld to free list(cnt = %d) [all fences done], ctx %u",
-			buf_done_req_id, ctx_isp->active_req_cnt, ctx->ctx_id);
+			"Move active request %lld to free list(cnt = %d) [all fences done], ctx %u, process_rdi_mismatch %d, request_mismatched %lld, ctx_mismatched %d",
+			buf_done_req_id, ctx_isp->active_req_cnt, ctx->ctx_id, 
+			ctx_isp->process_rdi_mismatch, ctx_isp->request_mismatched, ctx_isp->ctx_mismatched);
 		ctx_isp->req_info.last_bufdone_req_id = req->request_id;
 		ctx_isp->last_bufdone_err_apply_req_id = 0;
 	}
@@ -1755,7 +1798,7 @@ static int __cam_isp_handle_deferred_buf_done(
 	struct cam_isp_context *ctx_isp,
 	struct cam_ctx_request  *req,
 	bool bubble_handling,
-	uint32_t status, uint32_t event_cause)
+    uint32_t index, uint32_t status, uint32_t event_cause)
 {
 	int i, j;
 	int rc = 0;
@@ -1786,6 +1829,11 @@ static int __cam_isp_handle_deferred_buf_done(
 			continue;
 		}
 
+		if (index == j) {
+			CAM_INFO(CAM_ISP,"resource 0x%x has been signaled or add to num_acked", req_isp->fence_map_out[j].resource_handle);
+			continue;
+		}
+
 		if (!bubble_handling) {
 			CAM_WARN(CAM_ISP,
 				"Unexpected Buf done for res=0x%x on ctx[%d] for Req %llu, status=%d, possible bh delays",
@@ -1806,6 +1854,16 @@ static int __cam_isp_handle_deferred_buf_done(
 			}
 		} else {
 			req_isp->num_acked++;
+		}
+
+		CAM_DBG(CAM_ISP, "num_acked %d, num_fence_map_out %d", req_isp->num_acked, req_isp->num_fence_map_out);
+		if (req_isp->num_acked == req_isp->num_fence_map_out) {
+			rc = __cam_isp_ctx_handle_buf_done_for_req_list(ctx_isp, req);
+			if (rc)
+				CAM_ERR(CAM_ISP,
+					"Error in buf done for req = %llu with rc = %d",
+					req->request_id, rc);
+			return rc;
 		}
 	}
 
@@ -1832,6 +1890,7 @@ static int __cam_isp_ctx_handle_deferred_buf_done_in_bubble(
 	if (req_isp->num_deferred_acks)
 		rc = __cam_isp_handle_deferred_buf_done(ctx_isp, req,
 			req_isp->bubble_report,
+			-1,
 			CAM_SYNC_STATE_SIGNALED_ERROR,
 			CAM_SYNC_ISP_EVENT_BUBBLE);
 
@@ -1870,8 +1929,14 @@ static int __cam_isp_ctx_handle_buf_done_for_request_verify_addr(
 
 	req_isp = (struct cam_isp_ctx_req *) req->req_priv;
 
-	CAM_DBG(CAM_ISP, "Enter with bubble_state %d, req_bubble_detected %d",
-		bubble_state, req_isp->bubble_detected);
+	if ((ctx_isp->request_mismatched == req->request_id) &&
+		(ctx_isp->ctx_mismatched == ctx->ctx_id)) {
+		CAM_WARN(CAM_ISP, "_DBG_ Enter with bubble_state %d, req_bubble_detected %d, request_mismatched %lld ctx_mismatched %d defer_buf_done %d verify_consumed_addr %d process_rdi_mismatch %d",
+			bubble_state, req_isp->bubble_detected, ctx_isp->request_mismatched, ctx_isp->ctx_mismatched, defer_buf_done, verify_consumed_addr, ctx_isp->process_rdi_mismatch);
+	}
+
+	CAM_DBG(CAM_ISP, "_DBG_ Enter with bubble_state %d, req_bubble_detected %d, request_mismatched %lld ctx_mismatched %d defer_buf_done %d verify_consumed_addr %d process_rdi_mismatch %d",
+		bubble_state, req_isp->bubble_detected, ctx_isp->request_mismatched, ctx_isp->ctx_mismatched, defer_buf_done, verify_consumed_addr, ctx_isp->process_rdi_mismatch);
 
 	if (done->num_handles > CAM_NUM_OUT_PER_COMP_IRQ_MAX) {
 		CAM_ERR(CAM_ISP, "ctx: %u req: %llu num_handles: %u is more than %u",
@@ -1965,14 +2030,35 @@ static int __cam_isp_ctx_handle_buf_done_for_request_verify_addr(
 				ctx->ctx_id, req_isp->num_deferred_acks, j,
 				req_isp->fence_map_out[j].resource_handle,
 				req_isp->fence_map_out[j].sync_id);
+
+			if (0x6001 == req_isp->fence_map_out[j].resource_handle) {//RDI1
+				ctx_isp->process_rdi_mismatch = TRUE;
+				ctx_isp->request_mismatched = req->request_id;
+				ctx_isp->ctx_mismatched = ctx->ctx_id;
+
+				CAM_DBG(CAM_ISP, "_DBG_ RDI mismatched!, req = %llu, ctx %d",
+					req->request_id, ctx->ctx_id);
+			}
+
 			continue;
-		} else if (!req_isp->bubble_detected) {
+		} else if ((!req_isp->bubble_detected) && 
+			(FALSE == ctx_isp->process_rdi_mismatch)) {
+			if ((ctx_isp->request_mismatched == req->request_id) &&
+				(ctx_isp->ctx_mismatched == ctx->ctx_id)) {
+				CAM_WARN(CAM_ISP,
+					"Sync with success: req %lld res 0x%x fd 0x%x, ctx %u, request_mismatched %lld ctx_mismatched %d",
+					req->request_id,
+					req_isp->fence_map_out[j].resource_handle,
+					req_isp->fence_map_out[j].sync_id,
+					ctx->ctx_id, ctx_isp->request_mismatched, ctx_isp->ctx_mismatched);
+			}
+	
 			CAM_DBG(CAM_ISP,
-				"Sync with success: req %lld res 0x%x fd 0x%x, ctx %u",
+				"Sync with success: req %lld res 0x%x fd 0x%x, ctx %u, request_mismatched %lld ctx_mismatched %d",
 				req->request_id,
 				req_isp->fence_map_out[j].resource_handle,
 				req_isp->fence_map_out[j].sync_id,
-				ctx->ctx_id);
+				ctx->ctx_id, ctx_isp->request_mismatched, ctx_isp->ctx_mismatched);
 
 			rc = cam_sync_signal(req_isp->fence_map_out[j].sync_id,
 				CAM_SYNC_STATE_SIGNALED_SUCCESS,
@@ -1983,7 +2069,7 @@ static int __cam_isp_ctx_handle_buf_done_for_request_verify_addr(
 			} else if (req_isp->num_deferred_acks) {
 				/* Process deferred buf_done acks */
 				__cam_isp_handle_deferred_buf_done(ctx_isp,
-					req, false,
+					req, false, j,
 					CAM_SYNC_STATE_SIGNALED_SUCCESS,
 					CAM_SYNC_COMMON_EVENT_SUCCESS);
 			}
@@ -2006,7 +2092,7 @@ static int __cam_isp_ctx_handle_buf_done_for_request_verify_addr(
 			} else if (req_isp->num_deferred_acks) {
 				/* Process deferred buf_done acks */
 				__cam_isp_handle_deferred_buf_done(ctx_isp, req,
-					false,
+					false, j,
 					CAM_SYNC_STATE_SIGNALED_ERROR,
 					CAM_SYNC_ISP_EVENT_BUBBLE);
 			}
@@ -2030,7 +2116,7 @@ static int __cam_isp_ctx_handle_buf_done_for_request_verify_addr(
 			/* Process deferred buf_done acks */
 			if (req_isp->num_deferred_acks)
 				__cam_isp_handle_deferred_buf_done(ctx_isp, req,
-					true,
+					true, j,
 					CAM_SYNC_STATE_SIGNALED_ERROR,
 					CAM_SYNC_ISP_EVENT_BUBBLE);
 
@@ -2061,9 +2147,14 @@ static int __cam_isp_ctx_handle_buf_done_for_request_verify_addr(
 				req->request_id, CAM_REQ_MGR_SOF_EVENT_SUCCESS);
 	}
 
-	if ((unhandled_done.num_handles > 0) && (!defer_buf_done))
+	if ((unhandled_done.num_handles > 0) && (!defer_buf_done)) {
+		CAM_DBG(CAM_ISP,
+			"WARNING: req_id %lld num_acked %d map_out %d, ctx %u unhandled_done.num_handles %d",
+			req->request_id, req_isp->num_acked,
+			req_isp->num_fence_map_out, ctx->ctx_id, unhandled_done.num_handles);
 		__cam_isp_ctx_check_deferred_buf_done(
 			ctx_isp, &unhandled_done, bubble_state);
+    }
 
 	if (req_isp->num_acked > req_isp->num_fence_map_out) {
 		/* Should not happen */
@@ -2265,11 +2356,16 @@ static int __cam_isp_ctx_check_deferred_buf_done(
 		if (ctx_isp->last_applied_req_id !=
 			ctx_isp->last_bufdone_err_apply_req_id) {
 			CAM_DBG(CAM_ISP,
-				"Trying to find buf done with req in wait list, req %llu last apply id:%lld last err id:%lld curr_num_deferred: %u",
+				"[1]Trying to find buf done with req in wait list, req %llu last apply id:%lld last err id:%lld curr_num_deferred: %u",
 				req->request_id, ctx_isp->last_applied_req_id,
 				ctx_isp->last_bufdone_err_apply_req_id, curr_num_deferred);
 			ctx_isp->last_bufdone_err_apply_req_id =
 				ctx_isp->last_applied_req_id;
+		} else {
+			CAM_DBG(CAM_ISP,
+				"[2]Trying to find buf done with req in wait list, req %llu last apply id:%lld last err id:%lld curr_num_deferred: %u",
+				req->request_id, ctx_isp->last_applied_req_id,
+				ctx_isp->last_bufdone_err_apply_req_id, curr_num_deferred);
 		}
 
 		/*
@@ -2348,6 +2444,9 @@ static int __cam_isp_ctx_handle_buf_done_verify_addr(
 	struct cam_context *ctx = ctx_isp->base;
 
 	if (list_empty(&ctx->active_req_list)) {
+		CAM_WARN(CAM_ISP,
+			"Active_req_list empty, current active_req_cnt %d", 
+			ctx_isp->active_req_cnt);
 		return __cam_isp_ctx_check_deferred_buf_done(
 			ctx_isp, done, bubble_state);
 	}
@@ -2452,6 +2551,7 @@ static int __cam_isp_ctx_apply_pending_req(
 	spin_lock_bh(&ctx->lock);
 	req = list_first_entry(&ctx->pending_req_list, struct cam_ctx_request,
 		list);
+	list_del_init(&req->list); //xiaomi move this
 	spin_unlock_bh(&ctx->lock);
 
 	CAM_DBG(CAM_REQ, "Apply request %lld in substate %d ctx %u",
@@ -2477,7 +2577,6 @@ static int __cam_isp_ctx_apply_pending_req(
 	ctx_isp->last_applied_req_id = req->request_id;
 	atomic_set(&ctx_isp->apply_in_progress, 1);
 
-	list_del_init(&req->list);
 	list_add_tail(&req->list, &ctx->wait_req_list);
 
 	spin_unlock_bh(&ctx->lock);
@@ -2610,6 +2709,13 @@ static int __cam_isp_ctx_reg_upd_in_applied_state(
 	list_del_init(&req->list);
 
 	req_isp = (struct cam_isp_ctx_req *) req->req_priv;
+	if ((ctx_isp->request_mismatched == req->request_id) && 
+		(ctx->ctx_id == ctx_isp->ctx_mismatched)) {
+		CAM_WARN(CAM_REQ,
+			"request %lld, active list cnt = %d, ctx %u, num_fence_map_out %d ",
+			req->request_id, ctx_isp->active_req_cnt, ctx->ctx_id, req_isp->num_fence_map_out);
+	}
+
 	if (req_isp->num_fence_map_out != 0) {
 		list_add_tail(&req->list, &ctx->active_req_list);
 		ctx_isp->active_req_cnt++;
@@ -2929,6 +3035,14 @@ static int __cam_isp_ctx_epoch_in_applied(struct cam_isp_context *ctx_isp,
 	CAM_INFO_RATE_LIMIT(CAM_ISP, "ctx:%d Report Bubble flag %d req id:%lld",
 		ctx->ctx_id, req_isp->bubble_report, req->request_id);
 
+	// xiaomi add
+	__cam_isp_notify_mqs_event(
+		V4L_EVENT_CAM_MQS_ISP,
+		V4L_EVENT_CAM_MQS_BUBBLE,
+		req->request_id,
+		ctx);
+	// xiaomi add
+
 	if (req_isp->bubble_report) {
 		__cam_isp_ctx_notify_error_util(CAM_TRIGGER_POINT_SOF, CRM_KMD_ERR_BUBBLE,
 			req->request_id, ctx_isp);
@@ -2950,7 +3064,7 @@ static int __cam_isp_ctx_epoch_in_applied(struct cam_isp_context *ctx_isp,
 	list_del_init(&req->list);
 	list_add_tail(&req->list, &ctx->active_req_list);
 	ctx_isp->active_req_cnt++;
-	CAM_DBG(CAM_REQ, "move request %lld to active list(cnt = %d), ctx %u",
+	CAM_WARN(CAM_REQ, "move request %lld to active list(cnt = %d), ctx %u",
 		req->request_id, ctx_isp->active_req_cnt, ctx->ctx_id);
 
 	/*
@@ -3169,7 +3283,7 @@ static int __cam_isp_ctx_epoch_in_bubble_applied(
 	list_del_init(&req->list);
 	list_add_tail(&req->list, &ctx->active_req_list);
 	ctx_isp->active_req_cnt++;
-	CAM_DBG(CAM_ISP, "move request %lld to active list(cnt = %d) ctx %u",
+	CAM_WARN(CAM_ISP, "move request %lld to active list(cnt = %d) ctx %u",
 		req->request_id, ctx_isp->active_req_cnt, ctx->ctx_id);
 
 	if (!req_isp->bubble_report) {
@@ -4322,6 +4436,7 @@ static int __cam_isp_ctx_apply_req_in_activated_state(
 	struct cam_isp_ctx_req          *active_req_isp;
 	struct cam_isp_context          *ctx_isp = NULL;
 	struct cam_hw_config_args        cfg = {0};
+	bool print_on =                  FALSE;
 
 	ctx_isp = (struct cam_isp_context *) ctx->ctx_priv;
 
@@ -4376,6 +4491,11 @@ static int __cam_isp_ctx_apply_req_in_activated_state(
 		list);
 	spin_unlock_bh(&ctx->lock);
 
+	if ((ctx_isp->request_mismatched == req->request_id) &&
+		(ctx_isp->ctx_mismatched == ctx->ctx_id)) {
+		print_on = TRUE;
+	}
+
 	/*
 	 * Check whether the request id is matching the tip, if not, this means
 	 * we are in the middle of the error handling. Need to reject this apply
@@ -4389,10 +4509,17 @@ static int __cam_isp_ctx_apply_req_in_activated_state(
 		goto end;
 	}
 
-	CAM_DBG(CAM_REQ, "Apply request %lld in Substate[%s] ctx %u",
-		req->request_id,
-		__cam_isp_ctx_substate_val_to_type(ctx_isp->substate_activated),
-		ctx->ctx_id);
+	if (TRUE == print_on) {
+		CAM_WARN(CAM_REQ, "Apply request %lld in Substate[%s] ctx %u",
+			req->request_id,
+			__cam_isp_ctx_substate_val_to_type(ctx_isp->substate_activated),
+			ctx->ctx_id);
+	} else {
+		CAM_DBG(CAM_REQ, "Apply request %lld in Substate[%s] ctx %u",
+			req->request_id,
+			__cam_isp_ctx_substate_val_to_type(ctx_isp->substate_activated),
+			ctx->ctx_id);
+	}
 	req_isp = (struct cam_isp_ctx_req *) req->req_priv;
 
 	if (ctx_isp->active_req_cnt >=  2) {
@@ -4463,9 +4590,17 @@ static int __cam_isp_ctx_apply_req_in_activated_state(
 			__cam_isp_ctx_enqueue_request_in_order(ctx, req, false);
 		else
 			list_add_tail(&req->list, &ctx->wait_req_list);
-		CAM_DBG(CAM_ISP, "new substate Substate[%s], applied req %lld",
-			__cam_isp_ctx_substate_val_to_type(next_state),
-			ctx_isp->last_applied_req_id);
+
+		if (TRUE == print_on) {
+			CAM_WARN(CAM_ISP, "new substate Substate[%s], applied req %lld",
+				__cam_isp_ctx_substate_val_to_type(next_state),
+				ctx_isp->last_applied_req_id);
+		} else {
+			CAM_DBG(CAM_ISP, "new substate Substate[%s], applied req %lld",
+				__cam_isp_ctx_substate_val_to_type(next_state),
+				ctx_isp->last_applied_req_id);
+		}
+
 		spin_unlock_bh(&ctx->lock);
 
 		__cam_isp_ctx_update_state_monitor_array(ctx_isp,
@@ -4482,9 +4617,15 @@ static int __cam_isp_ctx_apply_req_in_activated_state(
 		list_add(&req->list, &ctx->active_req_list);
 		ctx_isp->active_req_cnt++;
 		spin_unlock_bh(&ctx->lock);
-		CAM_DBG(CAM_REQ,
-			"move request %lld to active list(cnt = %d), ctx %u",
-			req->request_id, ctx_isp->active_req_cnt, ctx->ctx_id);
+		if (TRUE == print_on) {
+			CAM_WARN(CAM_REQ,
+				"move request %lld to active list(cnt = %d), ctx %u",
+				req->request_id, ctx_isp->active_req_cnt, ctx->ctx_id);
+		} else {
+			CAM_DBG(CAM_REQ,
+				"move request %lld to active list(cnt = %d), ctx %u",
+				req->request_id, ctx_isp->active_req_cnt, ctx->ctx_id);
+		}
 	} else {
 		CAM_ERR_RATE_LIMIT(CAM_ISP,
 			"ctx_id:%d ,Can not apply (req %lld) the configuration, rc %d",
@@ -5486,7 +5627,7 @@ static int __cam_isp_ctx_rdi_only_sof_in_bubble_state(
 				if (req_isp->num_fence_map_out ==
 					req_isp->num_deferred_acks) {
 					__cam_isp_handle_deferred_buf_done(ctx_isp, req,
-						true,
+						true, -1,
 						CAM_SYNC_STATE_SIGNALED_ERROR,
 						CAM_SYNC_ISP_EVENT_BUBBLE);
 
@@ -7016,6 +7157,7 @@ static inline void __cam_isp_context_reset_ctx_params(
 	atomic_set(&ctx_isp->process_bubble, 0);
 	atomic_set(&ctx_isp->rxd_epoch, 0);
 	atomic_set(&ctx_isp->internal_recovery_set, 0);
+	ctx_isp->process_rdi_mismatch = FALSE;
 	ctx_isp->frame_id = 0;
 	ctx_isp->sof_timestamp_val = 0;
 	ctx_isp->boot_timestamp = 0;
@@ -7101,22 +7243,28 @@ static int __cam_isp_ctx_start_dev_in_ready(struct cam_context *ctx,
 	if (ctx_isp->offline_context && !req_isp->num_fence_map_out) {
 		list_add_tail(&req->list, &ctx->free_req_list);
 		atomic_set(&ctx_isp->rxd_epoch, 1);
-		CAM_DBG(CAM_REQ,
+		CAM_WARN(CAM_REQ,
 			"Move pending req: %lld to free list(cnt: %d) offline ctx %u",
 			req->request_id, ctx_isp->active_req_cnt, ctx->ctx_id);
 	} else if (ctx_isp->rdi_only_context || !req_isp->num_fence_map_out) {
 		list_add_tail(&req->list, &ctx->wait_req_list);
-		CAM_DBG(CAM_REQ,
+		CAM_WARN(CAM_REQ,
 			"Move pending req: %lld to wait list(cnt: %d) ctx %u",
 			req->request_id, ctx_isp->active_req_cnt, ctx->ctx_id);
 	} else {
 		list_add_tail(&req->list, &ctx->active_req_list);
 		ctx_isp->active_req_cnt++;
-		CAM_DBG(CAM_REQ,
+		CAM_WARN(CAM_REQ,
 			"Move pending req: %lld to active list(cnt: %d) ctx %u offline %d",
 			req->request_id, ctx_isp->active_req_cnt, ctx->ctx_id,
 			ctx_isp->offline_context);
 	}
+
+	CAM_WARN(CAM_ISP, "_DBG_ ctx %u req: %lld process_rdi_mismatch %d request_mismatched %lld ctx_mismatched %d",
+		ctx->ctx_id, req->request_id, ctx_isp->process_rdi_mismatch, ctx_isp->request_mismatched, ctx_isp->ctx_mismatched);
+	ctx_isp->process_rdi_mismatch = FALSE;
+	ctx_isp->request_mismatched = -1;
+	ctx_isp->ctx_mismatched = -1;
 
 	/*
 	 * Only place to change state before calling the hw due to
@@ -8237,3 +8385,35 @@ void cam_isp_get_frame_batchsize(struct cam_context *ctx,struct cam_packet *cpkt
 		}
 	}
 }
+
+// xiaomi add
+static int __cam_isp_notify_mqs_event(
+	uint32_t error_type, uint32_t error_code,
+	uint64_t error_request_id, struct cam_context *ctx)
+{
+	int                         rc = 0;
+	struct cam_req_mgr_message  req_msg;
+
+	req_msg.session_hdl = ctx->session_hdl;
+	req_msg.u.err_msg.device_hdl = ctx->dev_hdl;
+	req_msg.u.err_msg.error_type = error_type;
+	req_msg.u.err_msg.link_hdl = ctx->link_hdl;
+	req_msg.u.err_msg.request_id = error_request_id;
+	req_msg.u.err_msg.resource_size = 0x0;
+	req_msg.u.err_msg.error_code = error_code;
+
+	CAM_INFO(CAM_ISP,
+		"[DMQS] MQS event [type: %u code: %u] for req: %llu in ctx: %u on link: 0x%x notified",
+		error_type, error_code, error_request_id, ctx->ctx_id, ctx->link_hdl);
+
+	rc = cam_req_mgr_notify_message(&req_msg,
+			V4L_EVENT_CAM_MQS_ISP,
+			V4L_EVENT_CAM_MQS_EVENT);
+	if (rc)
+		CAM_ERR(CAM_ISP,
+			"[DMQS] Notifying MQS event error [type: %u code: %u] failed for req id:%llu in ctx %u on link: 0x%x",
+			error_request_id, ctx->ctx_id);
+
+	return rc;
+}
+// xiaomi add

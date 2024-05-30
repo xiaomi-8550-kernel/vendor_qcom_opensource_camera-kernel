@@ -876,6 +876,12 @@ struct cam_req_mgr_pf_err_msg {
 	__u32 reserved[3];
 };
 
+// xiaomi add
+#define V4L_EVENT_CAM_MQS_EVENT           (V4L2_EVENT_PRIVATE_START + 7)
+#define V4L_EVENT_CAM_MQS_ISP             1
+#define V4L_EVENT_CAM_MQS_BUBBLE          (V4L_EVENT_CAM_MQS_ISP << 16) + 1
+// xiaomi add
+
 /**
  * struct cam_req_mgr_message - 64 bytes is the max size that can be sent as v4l2 evt
  * @session_hdl: session to which the frame belongs to

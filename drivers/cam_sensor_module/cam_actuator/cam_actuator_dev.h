@@ -27,7 +27,7 @@
 #include "cam_soc_util.h"
 #include "cam_debug_util.h"
 #include "cam_context.h"
-#include "cam_actuator_parklens_thread.h" //xiaomi add
+#include "cam_parklens_thread.h" //xiaomi add
 
 #define NUM_MASTERS 2
 #define NUM_QUEUES 2
@@ -127,6 +127,7 @@ struct cam_actuator_ctrl_t {
 	void *cci_debug;
 	/* xiaomi add for cci debug end */
 	struct cam_actuator_parklens_ctrl_t parklens_ctrl; //xiaomi add
+	uint32_t cci_io_fail_count;
 };
 
 /**

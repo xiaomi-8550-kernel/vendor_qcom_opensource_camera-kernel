@@ -1,3 +1,4 @@
+ifeq ($(XIAOMI_CAMERA_ODM_ISHTAR_SERIES_UPGRADE), true)
 CAMERA_DLKM_ENABLED := true
 ifeq ($(TARGET_KERNEL_DLKM_DISABLE), true)
 	ifeq ($(TARGET_KERNEL_DLKM_CAMERA_OVERRIDE), false)
@@ -73,3 +74,4 @@ include $(DLKM_DIR)/Build_external_kernelmodule.mk
 
 endif # End of check for board platform
 endif # ifeq ($(CAMERA_DLKM_ENABLED),true)
+endif

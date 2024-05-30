@@ -247,6 +247,10 @@ struct csiphy_device;
  * @data_rate_reg_array       : array of data rate specific reg value pairs
  */
 struct data_rate_reg_info_t {
+	/* xiaomi add for mipi phy backup setting begin*/
+	uint32_t this_setting_max_choice;
+	uint32_t this_setting_current_choice;
+	/* xiaomi add for mipi phy backup setting end*/
 	uint64_t bandwidth;
 	ssize_t  data_rate_reg_array_size;
 	struct csiphy_reg_t *data_rate_reg_array[CAM_CSIPHY_MAX_DATARATE_VARIANTS];
@@ -348,6 +352,7 @@ struct cam_csiphy_param {
 	struct csiphy_hdl_tbl            hdl_data;
 	struct cam_csiphy_tz_secure_info secure_info;
 	bool                             secure_info_updated;
+	bool                             is_modify_onthego;	///<add by xiaomi for L3 crc device
 };
 
 struct csiphy_work_queue {
@@ -462,6 +467,10 @@ struct csiphy_device {
 	bool                                     skip_aux_settings;
 	bool                                     domain_id_security;
 	uint16_t                                 preamble_enable;
+	/* xiaomi add for mipi phy backup setting begin*/
+	char                           phy_dts_name[CAM_PHY_DTS_NAME];
+	uint8_t                        device_has_customized;
+	/* xiaomi add for mipi phy backup setting end*/
 };
 
 /**

@@ -38,6 +38,8 @@
 
 #define MAX_SYSTEM_PIPELINE_DELAY 2
 
+#define CAM_FRAME_SKIP_OPCODE 126
+
 #define CAM_PKT_NOP_OPCODE 127
 
 enum camera_flash_opcode {
@@ -46,6 +48,9 @@ enum camera_flash_opcode {
 	CAMERA_SENSOR_FLASH_OP_FIRELOW,
 	CAMERA_SENSOR_FLASH_OP_FIREHIGH,
 	CAMERA_SENSOR_FLASH_OP_FIREDURATION,
+	// MIUI ADD: Camera_HWCapabilityLimit
+	CAMERA_SENSOR_FLASH_OP_LOW_FIREDURATION,
+	// END Camera_HWCapabilityLimit
 	CAMERA_SENSOR_FLASH_OP_MAX,
 };
 
@@ -253,6 +258,7 @@ struct i2c_data_settings {
 	struct i2c_settings_array reg_bank_unlock_settings;
 	struct i2c_settings_array reg_bank_lock_settings;
 	struct i2c_settings_array parklens_settings; //xiaomi add
+	struct i2c_settings_array write_settings; //xiaomi add
 };
 
 struct cam_sensor_power_ctrl_t {
