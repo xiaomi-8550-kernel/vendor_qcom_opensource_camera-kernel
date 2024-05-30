@@ -16,6 +16,14 @@ ccflags-y += -DCONFIG_SPECTRA_CUSTOM=1
 ccflags-y += -DCONFIG_SPECTRA_SENSOR=1
 ccflags-y += -DCONFIG_USE_RPMH_DRV_API=1
 
+# Target Product
+ifeq ($(TARGET_PRODUCT), nuwa)
+CONFIG_TARGET_PRODUCT_NUWA := y
+endif
+ifeq ($(TARGET_PRODUCT), fuxi)
+CONFIG_TARGET_PRODUCT_FUXI := y
+endif
+
 # External Dependencies
 KBUILD_CPPFLAGS += -DCONFIG_MSM_MMRM=1
 ifeq ($(CONFIG_QCOM_VA_MINIDUMP), y)
