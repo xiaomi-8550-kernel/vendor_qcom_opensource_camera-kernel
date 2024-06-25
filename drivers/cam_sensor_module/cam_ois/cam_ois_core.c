@@ -378,7 +378,7 @@ static int cam_ois_slaveInfo_pkt_parser(struct cam_ois_ctrl_t *o_ctrl,
 	int32_t rc = 0;
 	struct cam_cmd_ois_info *ois_info;
 
-	if (!o_ctrl || !cmd_buf /*|| len < sizeof(struct cam_cmd_ois_info) */) {
+	if (!o_ctrl || !cmd_buf || len < sizeof(struct cam_cmd_ois_info)) {
 		CAM_ERR(CAM_OIS, "Invalid Args");
 		return -EINVAL;
 	}
