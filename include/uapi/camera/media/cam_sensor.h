@@ -361,17 +361,23 @@ struct cam_sensor_res_info {
  * @coeff           :    OIS FW coeff register address
  * @pheripheral     :    OIS pheripheral
  * @memory          :    OIS memory
+ * @fw_version            :   OIS firmware version
+ * @fw_addr_type          :   OIS fw Addr Type
+ * @is_addr_increase      :   OIS addr Increase
+ * @customized_ois_flag   :   customized ois flag
  */
 struct cam_ois_opcode {
 	__u32 prog;
 	__u32 coeff;
 	__u32 pheripheral;
 	__u32 memory;
-	__u8 fw_addr_type;
-	__u8 is_addr_increase;
-	__u16 fw_download_type;
 	__u32 fw_version;
-	__u8 customized_ois_flag;
+	__u8  fw_addr_type;
+	__u8  is_addr_increase;
+	__u8  customized_ois_flag;
+	__u8  is_littleendian_op;
+	__u32 fw_addr;
+	bool  fw_mem_store;
 } __attribute__((packed));
 
 /**
