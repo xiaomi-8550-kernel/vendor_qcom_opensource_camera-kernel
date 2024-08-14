@@ -267,14 +267,6 @@ static int cam_sensor_i2c_component_bind(struct device *dev,
 		goto free_perframe;
 	}
 
-	s_ctrl->i2c_data.bubble_update =
-		kzalloc(sizeof(struct i2c_settings_array) *
-		MAX_PER_FRAME_ARRAY, GFP_KERNEL);
-	if (s_ctrl->i2c_data.bubble_update == NULL) {
-		rc = -ENOMEM;
-		goto free_frame_skip;
-	}
-
 	INIT_LIST_HEAD(&(s_ctrl->i2c_data.init_settings.list_head));
 	INIT_LIST_HEAD(&(s_ctrl->i2c_data.config_settings.list_head));
 	INIT_LIST_HEAD(&(s_ctrl->i2c_data.streamon_settings.list_head));
@@ -286,7 +278,6 @@ static int cam_sensor_i2c_component_bind(struct device *dev,
 	for (i = 0; i < MAX_PER_FRAME_ARRAY; i++) {
 		INIT_LIST_HEAD(&(s_ctrl->i2c_data.per_frame[i].list_head));
 		INIT_LIST_HEAD(&(s_ctrl->i2c_data.frame_skip[i].list_head));
-		INIT_LIST_HEAD(&(s_ctrl->i2c_data.bubble_update[i].list_head));
 	}
 
 	s_ctrl->bridge_intf.device_hdl = -1;
@@ -301,9 +292,6 @@ static int cam_sensor_i2c_component_bind(struct device *dev,
 	s_ctrl->sensordata->power_info.dev = soc_info->dev;
 
 	return rc;
-
-free_frame_skip:
-	kfree(s_ctrl->i2c_data.frame_skip);
 free_perframe:
 	kfree(s_ctrl->i2c_data.per_frame);
 unreg_subdev:
@@ -342,7 +330,6 @@ static void cam_sensor_i2c_component_unbind(struct device *dev,
 
 	kfree(s_ctrl->i2c_data.per_frame);
 	kfree(s_ctrl->i2c_data.frame_skip);
-	kfree(s_ctrl->i2c_data.bubble_update);
 	v4l2_set_subdevdata(&(s_ctrl->v4l2_dev_str.sd), NULL);
 	kfree(s_ctrl);
 }
@@ -449,14 +436,6 @@ static int cam_sensor_component_bind(struct device *dev,
 		goto free_perframe;
 	}
 
-	s_ctrl->i2c_data.bubble_update =
-		kzalloc(sizeof(struct i2c_settings_array) *
-		MAX_PER_FRAME_ARRAY, GFP_KERNEL);
-	if (s_ctrl->i2c_data.bubble_update == NULL) {
-		rc = -ENOMEM;
-		goto free_frame_skip;
-	}
-
 	INIT_LIST_HEAD(&(s_ctrl->i2c_data.init_settings.list_head));
 	INIT_LIST_HEAD(&(s_ctrl->i2c_data.config_settings.list_head));
 	INIT_LIST_HEAD(&(s_ctrl->i2c_data.streamon_settings.list_head));
@@ -468,7 +447,6 @@ static int cam_sensor_component_bind(struct device *dev,
 	for (i = 0; i < MAX_PER_FRAME_ARRAY; i++) {
 		INIT_LIST_HEAD(&(s_ctrl->i2c_data.per_frame[i].list_head));
 		INIT_LIST_HEAD(&(s_ctrl->i2c_data.frame_skip[i].list_head));
-		INIT_LIST_HEAD(&(s_ctrl->i2c_data.bubble_update[i].list_head));
 	}
 
 	s_ctrl->bridge_intf.device_hdl = -1;
@@ -489,10 +467,19 @@ static int cam_sensor_component_bind(struct device *dev,
 	g_i3c_sensor_data[soc_info->index].s_ctrl = s_ctrl;
 	init_completion(&g_i3c_sensor_data[soc_info->index].probe_complete);
 
+	/* xiaomi add for cci debug start */
+	rc = cam_cci_dev_create_debugfs_entry(s_ctrl->sensor_name,
+		s_ctrl->soc_info.index, CAM_SENSOR_NAME,
+		&s_ctrl->io_master_info, s_ctrl->cci_i2c_master,
+		&s_ctrl->cci_debug);
+	if (rc) {
+		CAM_WARN(CAM_SENSOR, "debugfs creation failed");
+		rc = 0;
+	}
+	/* xiaomi add for cci debug end */
+
 	return rc;
 
-free_frame_skip:
-	kfree(s_ctrl->i2c_data.frame_skip);
 free_perframe:
 	kfree(s_ctrl->i2c_data.per_frame);
 unreg_subdev:
@@ -526,13 +513,15 @@ static void cam_sensor_component_unbind(struct device *dev,
 	cam_sensor_shutdown(s_ctrl);
 	mutex_unlock(&(s_ctrl->cam_sensor_mutex));
 	cam_unregister_subdev(&(s_ctrl->v4l2_dev_str));
+	/* xiaomi add for cci debug start */
+	cam_cci_dev_remove_debugfs_entry((void *)s_ctrl->cci_debug);
+	/* xiaomi add for cci debug end */
 	soc_info = &s_ctrl->soc_info;
 	for (i = 0; i < soc_info->num_clk; i++)
 		devm_clk_put(soc_info->dev, soc_info->clk[i]);
 
 	kfree(s_ctrl->i2c_data.per_frame);
 	kfree(s_ctrl->i2c_data.frame_skip);
-	kfree(s_ctrl->i2c_data.bubble_update);
 	platform_set_drvdata(pdev, NULL);
 	v4l2_set_subdevdata(&(s_ctrl->v4l2_dev_str.sd), NULL);
 	devm_kfree(&pdev->dev, s_ctrl);
