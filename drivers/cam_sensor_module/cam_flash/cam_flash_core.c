@@ -29,10 +29,8 @@ int cam_flash_led_prepare(struct led_trigger *trigger, int options,
 	return -EPERM;
 #endif
 	} else {
-#if IS_REACHABLE(CONFIG_LEDS_QPNP_FLASH_V2)
+#if IS_REACHABLE(CONFIG_LEDS_QTI_FLASH)
 		rc = qpnp_flash_led_prepare(trigger, options, max_current);
-#elif IS_REACHABLE(CONFIG_LEDS_QTI_FLASH)
-		rc = qti_flash_led_prepare(trigger, options, max_current);
 #endif
 		if (rc) {
 			CAM_ERR(CAM_FLASH,
